@@ -6,6 +6,15 @@ import tensorflow as tf
 from werkzeug.utils import secure_filename
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 
+# Suppress TensorFlow logs and optimize for CPU
+import logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings and informational messages
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Force TensorFlow to use CPU only
+
+# Optimize TensorFlow threading for CPU performance
+tf.config.threading.set_inter_op_parallelism_threads(2)
+tf.config.threading.set_intra_op_parallelism_threads(2)
+
 # Initialize Flask app
 app = Flask(__name__)
 
@@ -21,11 +30,18 @@ os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
 # Load the trained generator model (make sure the model path is correct)
 model_path = '30_gen_model.h5'  # Path to your trained model
-generator = tf.keras.models.load_model(model_path)
+try:
+    generator = tf.keras.models.load_model(model_path)
+except Exception as e:
+    logging.error(f"Error loading model: {e}")
+    generator = None
 
 # Dummy image processing function using the generator model
 def process_image(image_path, output_path):
     """Simulates processing an image by using the generator model."""
+    if generator is None:
+        raise ValueError("Model not loaded. Check the model path or format.")
+
     img = load_img(image_path, target_size=(32, 32))  # Resize to match input size (32x32)
     img_array = img_to_array(img) / 255.0  # Normalize to [0, 1]
     img_array = np.expand_dims(img_array, axis=0)  # Add batch dimension
@@ -61,17 +77,21 @@ def predict():
         input_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(input_path)
 
-        # Process the image
-        output_filename = 'processed_' + filename
-        output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
-        process_image(input_path, output_path)
+        try:
+            # Process the image
+            output_filename = 'processed_' + filename
+            output_path = os.path.join(app.config['OUTPUT_FOLDER'], output_filename)
+            process_image(input_path, output_path)
 
-        return render_template(
-            'index.html',
-            prediction_text="Image successfully processed!",
-            original_image=filename,
-            processed_image=output_filename
-        )
+            return render_template(
+                'index.html',
+                prediction_text="Image successfully processed!",
+                original_image=filename,
+                processed_image=output_filename
+            )
+        except Exception as e:
+            logging.error(f"Error processing image: {e}")
+            return render_template('index.html', prediction_text="Error processing the image. Check server logs.")
 
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
@@ -84,4 +104,4 @@ def output_file(filename):
     return send_from_directory(app.config['OUTPUT_FOLDER'], filename)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False)
